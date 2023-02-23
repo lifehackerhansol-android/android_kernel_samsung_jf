@@ -2008,6 +2008,11 @@ static ssize_t cmd_store(struct device *dev, struct device_attribute *attr,
 	struct factory_data *data = f54->factory_data;
 	struct synaptics_rmi4_data *rmi4_data = f54->rmi4_data;
 
+	if (strlen(buf) >= CMD_STR_LEN) {		
+		dev_err(&rmi4_data->i2c_client->dev, "%s: cmd length is over (%s,%d)!!\n", __func__, buf, (int)strlen(buf));
+		return -EINVAL;
+	}
+
 	if (data->cmd_is_running == true) {
 		dev_err(&rmi4_data->i2c_client->dev, "%s: Still servicing previous command. Skip cmd :%s\n",
 			 __func__, buf);
@@ -2069,7 +2074,7 @@ static ssize_t cmd_store(struct device *dev, struct device_attribute *attr,
 				start = pos + 1;
 			}
 			pos++;
-		} while (pos - buf <= length);
+		} while ((pos - buf <= length) && (param_cnt < CMD_PARAM_NUM));
 	}
 
 	if (cmd_found) {
@@ -2267,7 +2272,8 @@ static void get_fw_ver_bin(void)
 	|| defined(CONFIG_MACH_MELIUS_VZW) \
 	|| defined(CONFIG_MACH_MELIUS_TMO) \
 	|| defined(CONFIG_MACH_MELIUS_SPR) \
-	|| defined(CONFIG_MACH_MELIUS_USC)
+	|| defined(CONFIG_MACH_MELIUS_USC) \
+	|| defined(CONFIG_MACH_MELIUS_MTR)
 
 	if (rmi4_data->manufactures_num_of_ic == 0x01) {
 		sprintf(data->cmd_buff, "SY%02X%02X%02X",
@@ -2317,7 +2323,8 @@ static void get_fw_ver_ic(void)
 	|| defined(CONFIG_MACH_MELIUS_VZW) \
 	|| defined(CONFIG_MACH_MELIUS_TMO) \
 	|| defined(CONFIG_MACH_MELIUS_SPR) \
-	|| defined(CONFIG_MACH_MELIUS_USC)
+	|| defined(CONFIG_MACH_MELIUS_USC) \
+	|| defined(CONFIG_MACH_MELIUS_MTR)
 	
 	if (rmi4_data->manufactures_num_of_ic == 0x01) {
 		sprintf(data->cmd_buff, "SY%02X%02X%02X",
@@ -4633,7 +4640,7 @@ f54_found:
 		dev_err(&rmi4_data->i2c_client->dev, "%s: Failed to create device for the sysfs\n",
 				__func__);
 		retval = IS_ERR(factory_data->fac_dev_ts);
-		goto exit_cmd_attr_group;
+		goto exit_ts_device_create;
 	}
 
 	retval = sysfs_create_group(&factory_data->fac_dev_ts->kobj,
@@ -4642,7 +4649,7 @@ f54_found:
 		dev_err(&rmi4_data->i2c_client->dev,
 				"%s: Failed to create sysfs attributes\n",
 				__func__);
-		goto exit_cmd_attr_group;
+		goto exit_ts_group_create;
 	}
 
 	factory_data->fac_dev_tskey = device_create(sec_class,
@@ -4653,7 +4660,7 @@ f54_found:
 		dev_err(&rmi4_data->i2c_client->dev, "%s: Failed to create device for the sysfs\n",
 				__func__);
 		retval = IS_ERR(factory_data->fac_dev_tskey);
-		goto exit_tskey_attr_group;
+		goto exit_tskey_device_create;
 	}
 
 	retval = sysfs_create_group(&factory_data->fac_dev_tskey->kobj,
@@ -4662,7 +4669,7 @@ f54_found:
 		dev_err(&rmi4_data->i2c_client->dev,
 				"%s: Failed to create sysfs attributes\n",
 				__func__);
-		goto exit_tskey_attr_group;
+		goto exit_tskey_group_create;
 	}
 
 	factory_data->fac_dev_tsp_ic = device_create(sec_class,
@@ -4673,7 +4680,7 @@ f54_found:
 		dev_err(&rmi4_data->i2c_client->dev, "%s: Failed to create device for the sysfs\n",
 				__func__);
 		retval = IS_ERR(factory_data->fac_dev_tsp_ic);
-		goto exit_cmd_attr_group;
+		goto exit_tspic_device_create;
 	}
 
 	retval = sysfs_create_group(&factory_data->fac_dev_tsp_ic->kobj,
@@ -4682,7 +4689,7 @@ f54_found:
 		dev_err(&rmi4_data->i2c_client->dev,
 				"%s: Failed to create sysfs attributes\n",
 				__func__);
-		goto exit_cmd_attr_group;
+		goto exit_tspic_group_create;
 	}
 
 	f54->factory_data = factory_data;
@@ -4705,8 +4712,17 @@ f54_found:
 	return 0;
 
 #ifdef FACTORY_MODE
-exit_cmd_attr_group:
-exit_tskey_attr_group:
+exit_tspic_group_create:
+	device_unregister(factory_data->fac_dev_tsp_ic);
+exit_tspic_device_create:
+	sysfs_remove_group(&f54->factory_data->fac_dev_tskey->kobj, &tskey_attr_group);
+exit_tskey_group_create:
+	device_unregister(factory_data->fac_dev_tskey);
+exit_tskey_device_create:
+	sysfs_remove_group(&factory_data->fac_dev_ts->kobj, &cmd_attr_group);
+exit_ts_group_create:
+	device_unregister(factory_data->fac_dev_ts);
+exit_ts_device_create:
 	kfree(factory_data->abscap_data);
 	kfree(factory_data->absdelta_data);
 	kfree(factory_data->rawcap_data);
@@ -4746,7 +4762,14 @@ static void synaptics_rmi4_f54_remove(struct synaptics_rmi4_data *rmi4_data)
 	destroy_workqueue(f54->status_workqueue);
 
 #ifdef FACTORY_MODE
-	sysfs_remove_group(f54->attr_dir, &cmd_attr_group);
+	sysfs_remove_group(&f54->factory_data->fac_dev_ts->kobj, &cmd_attr_group);
+	sysfs_remove_group(&f54->factory_data->fac_dev_tskey->kobj, &tskey_attr_group);
+	sysfs_remove_group(&f54->factory_data->fac_dev_tsp_ic->kobj, &tspic_attr_group);
+
+	device_unregister(f54->factory_data->fac_dev_tsp_ic);
+	device_unregister(f54->factory_data->fac_dev_tskey);
+	device_unregister(f54->factory_data->fac_dev_ts);
+
 	kfree(f54->factory_data->abscap_data);
 	kfree(f54->factory_data->absdelta_data);
 	kfree(f54->factory_data->rawcap_data);

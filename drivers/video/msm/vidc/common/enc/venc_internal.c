@@ -971,7 +971,7 @@ u32 vid_enc_set_get_entropy_cfg(struct video_client_ctx *client_ctx,
 	vcd_property_hdr.sz =
 		sizeof(struct vcd_property_entropy_control);
 	if (set_flag) {
-		switch (entropy_cfg->longentropysel) {
+		switch (entropy_cfg->entropysel) {
 		case VEN_ENTROPY_MODEL_CAVLC:
 			control.entropy_sel = VCD_ENTROPY_SEL_CAVLC;
 			break;
@@ -1024,11 +1024,11 @@ u32 vid_enc_set_get_entropy_cfg(struct video_client_ctx *client_ctx,
 		} else {
 			switch (control.entropy_sel) {
 			case VCD_ENTROPY_SEL_CABAC:
-				entropy_cfg->cabacmodel =
+				entropy_cfg->entropysel =
 					VEN_ENTROPY_MODEL_CABAC;
 				break;
 			case VCD_ENTROPY_SEL_CAVLC:
-				entropy_cfg->cabacmodel =
+				entropy_cfg->entropysel =
 					VEN_ENTROPY_MODEL_CAVLC;
 				break;
 			default:
@@ -1765,7 +1765,12 @@ u32 vid_enc_encode_frame(struct video_client_ctx *client_ctx,
 				&buff_handle);
 
 		if (vcd_input_buffer.data_len > 0) {
-			if (ion_flag == ION_FLAG_CACHED && buff_handle) {
+	        #if !defined(CONFIG_MSM_IOMMU) && defined(CONFIG_SEC_PRODUCT_8960)
+	    	     if ((ion_flag & ION_FLAG_CACHED) && buff_handle)
+			#else
+			     if (ion_flag == ION_FLAG_CACHED && buff_handle)
+            #endif
+				 {
 				msm_ion_do_cache_op(
 				client_ctx->user_ion_client,
 				buff_handle,

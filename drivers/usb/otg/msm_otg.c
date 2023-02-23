@@ -383,7 +383,7 @@ static void ulpi_init(struct msm_otg *motg)
 		return;
 
 	while (seq[0] >= 0) {
-		dev_vdbg(motg->phy.dev, "ulpi: write 0x%02x to 0x%02x\n",
+		dev_info(motg->phy.dev, "ulpi: write 0x%02x to 0x%02x\n",
 				seq[0], seq[1]);
 		ulpi_write(&motg->phy, seq[0], seq[1]);
 		seq += 2;
@@ -1234,6 +1234,7 @@ static void msm_otg_start_host(struct usb_otg *otg, int on)
 	struct msm_otg *motg = container_of(otg->phy, struct msm_otg, phy);
 	struct msm_otg_platform_data *pdata = motg->pdata;
 	struct usb_hcd *hcd;
+	int rc;
 
 	if (!otg->host)
 		return;
@@ -1241,8 +1242,17 @@ static void msm_otg_start_host(struct usb_otg *otg, int on)
 #ifdef CONFIG_USB_HOST_NOTIFY
 	if (on == 1) {
 		motg->ndev.mode = NOTIFY_HOST_MODE;
+#if defined(CONFIG_SEC_PRODUCT_8960)
+		if (!motg->smartdock)
+			host_state_notify(&motg->ndev, NOTIFY_HOST_ADD);
+#endif
 	} else if (on == 0) {
 		motg->ndev.mode = NOTIFY_NONE_MODE;
+#if defined(CONFIG_SEC_PRODUCT_8960)
+        if (!motg->smartdock)
+		    host_state_notify(&motg->ndev, NOTIFY_HOST_REMOVE);
+	motg->smartdock = false;
+#endif
 	}
 #endif
 	hcd = bus_to_hcd(otg->host);
@@ -1261,6 +1271,17 @@ static void msm_otg_start_host(struct usb_otg *otg, int on)
 		 */
 		if (pdata->setup_gpio)
 			pdata->setup_gpio(OTG_STATE_A_HOST);
+
+		/*
+		 * Increase 3.3V rail voltage to increase cross over voltage.
+		 * This is required to get some full speed audio headsets
+		 * working.
+		 */
+		rc = regulator_set_voltage(hsusb_3p3, USB_PHY_3P3_VOL_MAX,
+				USB_PHY_3P3_VOL_MAX);
+		if (rc)
+			dev_dbg(otg->phy->dev, "unable to increase 3.3V rail\n");
+
 		usb_add_hcd(hcd, hcd->irq, IRQF_SHARED);
 	} else {
 		dev_info(otg->phy->dev, "host off\n");
@@ -1275,6 +1296,11 @@ static void msm_otg_start_host(struct usb_otg *otg, int on)
 		if (pdata->otg_control == OTG_PHY_CONTROL)
 			ulpi_write(otg->phy, OTG_COMP_DISABLE,
 				ULPI_CLR(ULPI_PWR_CLK_MNG_REG));
+
+		rc = regulator_set_voltage(hsusb_3p3, USB_PHY_3P3_VOL_MIN,
+				USB_PHY_3P3_VOL_MAX);
+		if (rc)
+			dev_dbg(otg->phy->dev, "unable to restore 3.075V rail\n");
 	}
 }
 
@@ -2534,8 +2560,6 @@ static void msm_otg_sm_work(struct work_struct *w)
 						otg->phy->state =
 							OTG_STATE_B_PERIPHERAL;
 					}
-					schedule_delayed_work(&motg->check_ta_work,
-						MSM_CHECK_TA_DELAY);
 					break;
 				default:
 					break;
@@ -3254,7 +3278,28 @@ void msm_otg_set_vbus_state(int online)
 }
 EXPORT_SYMBOL_GPL(msm_otg_set_vbus_state);
 #endif
+void msm_otg_set_charging_state(bool enable)
+{
+	struct msm_otg *motg = the_msm_otg;
+	static bool charging;
 
+	if (charging == enable)
+		return;
+	else
+		charging = enable;
+
+	pr_info("%s enable=%d\n", __func__, enable);
+
+	if (enable) {
+		motg->chg_type = USB_DCP_CHARGER;
+		motg->chg_state = USB_CHG_STATE_DETECTED;
+		schedule_work(&motg->sm_work);
+	} else {
+		motg->chg_state = USB_CHG_STATE_UNDEFINED;
+		motg->chg_type = USB_INVALID_CHARGER;
+	}
+}
+EXPORT_SYMBOL_GPL(msm_otg_set_charging_state);
 void msm_otg_set_id_state(int online)
 {
 	struct msm_otg *motg = the_msm_otg;
@@ -3284,6 +3329,9 @@ void msm_otg_set_smartdock_state(bool online)
 	if (online) {
 		dev_info(motg->phy.dev, "SMARTDOCK : ID set\n");
 		motg->smartdock = false;
+#if defined (CONFIG_SEC_PRODUCT_8960)
+		motg->smartdock = true;
+#endif
 		set_bit(ID, &motg->inputs);
 	} else {
 		dev_info(motg->phy.dev, "SMARTDOCK : ID clear\n");

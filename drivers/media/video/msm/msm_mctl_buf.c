@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2013, 2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -836,9 +836,9 @@ int msm_mctl_buf_done_pp(struct msm_cam_media_controller *pmctl,
 
 	if (buf_handle->buf_lookup_type == BUF_LOOKUP_BY_INST_HANDLE) {
 		idx = GET_MCTLPP_INST_IDX(buf_handle->inst_handle);
-		if (idx > MSM_DEV_INST_MAX) {
+		if (idx >= MSM_DEV_INST_MAX) {
 			idx = GET_VIDEO_INST_IDX(buf_handle->inst_handle);
-			BUG_ON(idx > MSM_DEV_INST_MAX);
+			BUG_ON(idx >= MSM_DEV_INST_MAX);
 			pcam_inst = pmctl->pcam_ptr->dev_inst[idx];
 		} else {
 			pcam_inst = pmctl->pcam_ptr->mctl_node.dev_inst[idx];
@@ -884,6 +884,12 @@ int msm_mctl_buf_return_buf(struct msm_cam_media_controller *pmctl,
 	struct msm_cam_v4l2_dev_inst *pcam_inst;
 	struct msm_cam_v4l2_device *pcam = pmctl->pcam_ptr;
 	unsigned long flags = 0;
+
+	if (image_mode < 0 || image_mode >= MSM_MAX_IMG_MODE) {
+		pr_err("%s: image_mode %d out-of-bounds",
+				__func__, image_mode);
+		return -EINVAL;
+	}
 
 	if (pcam->mctl_node.dev_inst_map[image_mode]) {
 		idx = pcam->mctl_node.dev_inst_map[image_mode]->my_index;
@@ -981,6 +987,8 @@ static int __msm_mctl_map_user_frame(struct msm_cam_meta_frame *meta_frame,
 
 		/* Validate the offsets with the mapped length. */
 		if ((meta_frame->frame.mp[i].addr_offset > len) ||
+			(meta_frame->frame.mp[i].data_offset > UINT_MAX -
+			meta_frame->frame.mp[i].length) ||
 			(meta_frame->frame.mp[i].data_offset +
 			meta_frame->frame.mp[i].length > len)) {
 			pr_err("%s: Invalid offsets A %d D %d L %d len %ld",
@@ -1021,13 +1029,14 @@ static int __msm_mctl_map_user_frame(struct msm_cam_meta_frame *meta_frame,
 static int __msm_mctl_unmap_user_frame(struct msm_cam_meta_frame *meta_frame,
 	struct ion_client *client, int domain_num)
 {
-	int i = 0, rc = 0;
+	int i = 0;
 
 	for (i = 0; i < meta_frame->frame.num_planes; i++) {
 		D("%s Plane %d handle %p", __func__, i,
 			meta_frame->map[i].handle);
 		put_pmem_file(meta_frame->map[i].file);
 	}
+	return 0;
 }
 
 /* Map using PMEM APIs */
@@ -1038,7 +1047,7 @@ static int __msm_mctl_map_user_frame(struct msm_cam_meta_frame *meta_frame,
 	unsigned long paddr = 0;
 	struct file *file = NULL;
 	unsigned long len;
-	int i = 0, j = 0;
+	int i = 0, j = 0, rc=0;
 
 	for (i = 0; i < meta_frame->frame.num_planes; i++) {
 		rc = get_pmem_file(meta_frame->frame.mp[i].fd,
@@ -1051,7 +1060,7 @@ static int __msm_mctl_map_user_frame(struct msm_cam_meta_frame *meta_frame,
 				if (meta_frame->map[j].file)
 					put_pmem_file(meta_frame->map[j].file);
 
-			return -EACCES;
+			return rc;
 		}
 		D("%s Got pmem file for fd %d plane %d as %p", __func__,
 			meta_frame->frame.mp[i].fd, i, file);

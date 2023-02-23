@@ -39,7 +39,13 @@
 #if defined(CONFIG_FB_MSM_MIPI_NOVATEK_VIDEO_WXGA_PT_PANEL)
 #include "samsung_cmc624_tune_konalte.h"
 #elif defined(CONFIG_FB_MSM_MIPI_NOVATEK_VIDEO_HD_PT_PANEL)
+#if defined(CONFIG_NOVATEK_VIDEO_HD_CLK_MIPICLK_432)
+#include "samsung_cmc624_tune_melius_432M.h"
+#elif defined(CONFIG_NOVATEK_VIDEO_HD_CLK_MIPICLK_480)
+#include "samsung_cmc624_tune_melius_480M.h"
+#else
 #include "samsung_cmc624_tune_melius.h"
+#endif
 #else
 #include "samsung_cmc624_tune.h"
 #endif
@@ -1229,7 +1235,7 @@ int load_tuning_data(char *filename)
 	filp = filp_open(filename, O_RDONLY, 0);
 	if (IS_ERR(filp)) {
 		pr_debug("[CMC624:ERROR]:File open failed\n");
-		return -1;
+		goto err;
 	}
 
 	l = filp->f_path.dentry->d_inode->i_size;
@@ -1240,7 +1246,7 @@ int load_tuning_data(char *filename)
 		pr_debug(
 			"[CMC624:ERROR]:Can't not alloc memory for tuning file load\n");
 		filp_close(filp, current->files);
-		return -1;
+		goto err;
 	}
 	pos = 0;
 	memset(dp, 0, l);
@@ -1252,7 +1258,7 @@ int load_tuning_data(char *filename)
 		pr_debug("[CMC624:ERROR] : vfs_read() filed ret : %d\n", ret);
 		kfree(dp);
 		filp_close(filp, current->files);
-		return -1;
+		goto err;
 	}
 
 	filp_close(filp, current->files);
@@ -1272,6 +1278,9 @@ int load_tuning_data(char *filename)
 
 	kfree(dp);
 	return cmc624_TuneSeqLen;
+err:
+	set_fs(fs);
+	return -1;
 }
 #define SUB_TUNE	0
 #define MAIN_TUNE	1

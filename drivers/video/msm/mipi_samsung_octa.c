@@ -99,6 +99,10 @@ static int mipi_samsung_disp_send_cmd(struct msm_fb_data_type *mfd,
 	cmdreq.flags =	CMD_REQ_COMMIT;
 
 		switch (cmd) {
+		case PANEL_READY_TO_ON:
+			cmd_desc = msd.mpd->ready_to_on.cmd;
+			cmd_size = msd.mpd->ready_to_on.size;
+			break;
 		case PANEL_ON:
 			cmd_desc = msd.mpd->on.cmd;
 			cmd_size = msd.mpd->on.size;
@@ -457,7 +461,11 @@ static void execute_panel_init(struct msm_fb_data_type *mfd)
 	char *mtp_buffer4 = (char *)&(msd.mpd->smart_se6e8fa.hbm_reg.b1_reg);
 	char *mtp_buffer5 = (char *)&(msd.mpd->smart_se6e8fa.hbm_reg.b6_reg_magna);
 
-	mipi_samsung_disp_send_cmd(mfd, PANEL_MTP_ENABLE, false);
+	if (get_ldi_chip() == LDI_MAGNA) {
+		mipi_set_tx_power_mode(LP_TX_MODE);
+		mipi_samsung_disp_send_cmd(mfd, PANEL_MTP_ENABLE, false);
+	} else
+		mipi_samsung_disp_send_cmd(mfd, PANEL_MTP_ENABLE, false);
 
 	/* read LDi ID */
 	msd.mpd->manufacture_id = mipi_samsung_manufacture_id(mfd);
@@ -573,6 +581,7 @@ static int mipi_samsung_disp_on(struct platform_device *pdev)
 	struct msm_fb_data_type *mfd;
 	struct mipi_panel_info *mipi;
 	static int first_boot_on;
+	u32 tmp;
 
 	mfd = platform_get_drvdata(pdev);
 	if (unlikely(!mfd))
@@ -585,6 +594,20 @@ static int mipi_samsung_disp_on(struct platform_device *pdev)
 	if (!first_boot_on) {
 		execute_panel_init(mfd);
 		first_boot_on = 1;
+	}
+
+	if (get_ldi_chip() == LDI_MAGNA) {
+		mipi_set_tx_power_mode(LP_TX_MODE);
+		mipi_samsung_disp_send_cmd(mfd, PANEL_READY_TO_ON, false);
+		mipi_set_tx_power_mode(HS_TX_MODE);
+
+		/* force dsi_clk alway on 
+		*    Magan nees clk lane LP mode before sending 0xF0 & 0xFC & 0xD2 cmds
+		*/
+		tmp = MIPI_INP(MIPI_DSI_BASE + 0xA8);
+		tmp |= (1<<28);
+		MIPI_OUTP(MIPI_DSI_BASE + 0xA8, tmp);
+		wmb();
 	}
 
 	if (get_auto_brightness() >= 6)
@@ -1289,7 +1312,7 @@ static void load_tuning_file(char *filename)
 	filp = filp_open(filename, O_RDONLY, 0);
 	if (IS_ERR(filp)) {
 		printk(KERN_ERR "%s File open failed\n", __func__);
-		return;
+		goto err;
 	}
 
 	l = filp->f_path.dentry->d_inode->i_size;
@@ -1299,7 +1322,7 @@ static void load_tuning_file(char *filename)
 	if (dp == NULL) {
 		pr_info("Can't not alloc memory for tuning file load\n");
 		filp_close(filp, current->files);
-		return;
+		goto err;
 	}
 	pos = 0;
 	memset(dp, 0, l);
@@ -1312,7 +1335,7 @@ static void load_tuning_file(char *filename)
 		pr_info("vfs_read() filed ret : %d\n", ret);
 		kfree(dp);
 		filp_close(filp, current->files);
-		return;
+		goto err;
 	}
 
 	filp_close(filp, current->files);
@@ -1322,6 +1345,10 @@ static void load_tuning_file(char *filename)
 	sending_tune_cmd(dp, l);
 
 	kfree(dp);
+
+	return;
+err:
+	set_fs(fs);
 }
 
 
@@ -1341,6 +1368,10 @@ static ssize_t tuning_store(struct device *dev,
 			    size_t size)
 {
 	char *pt;
+
+	if (buf == NULL || strchr(buf, '.') || strchr(buf, '/'))
+		return size;
+
 	memset(tuning_file, 0, sizeof(tuning_file));
 	snprintf(tuning_file, MAX_FILE_NAME, "%s%s", TUNING_FILE_PATH, buf);
 

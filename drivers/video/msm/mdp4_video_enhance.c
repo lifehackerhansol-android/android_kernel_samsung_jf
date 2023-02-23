@@ -36,10 +36,19 @@
 #include <linux/ioctl.h>
 
 #include "mdp4_video_enhance.h"
+#if defined(CONFIG_FB_MSM_MIPI_SAMSUNG_OLED_VIDEO_WVGA_PT)
+#include "mdp4_video_tuning_golden.h"
+#elif defined(CONFIG_FB_MSM_MIPI_SAMSUNG_TFT_VIDEO_WSVGA_PT_PANEL)
+#include "mdp4_video_tuning_lt02.h"
+#else
 #include "mdp4_video_tuning.h"
+#endif
 #include "msm_fb.h"
 #include "mdp.h"
 #include "mdp4.h"
+extern int mdp_lut_i;
+extern int mdp_lut_push;
+extern int mdp_lut_push_i;
 
 #define MDP4_VIDEO_ENHANCE_TUNING
 #define VIDEO_ENHANCE_DEBUG
@@ -109,7 +118,7 @@ static int parse_text(char *src, int len)
 	int i, count, ret;
 	int index = 0;
 	int j = 0;
-	char *str_line[300];
+	char *str_line[252];
 	char *sstart;
 	char *c;
 	unsigned int data1, data2, data3;
@@ -177,7 +186,7 @@ static int load_tuning_data(char *filename)
 	filp = filp_open(filename, O_RDONLY, 0);
 	if (IS_ERR(filp)) {
 		printk(KERN_ERR "[CMC623:ERROR]:File open failed\n");
-		return -1;
+		goto err;
 	}
 
 	l = filp->f_path.dentry->d_inode->i_size;
@@ -189,7 +198,7 @@ static int load_tuning_data(char *filename)
 		    ("[CMC623:ERROR]:Can't not alloc memory"\
 			"for tuning file load\n");
 		filp_close(filp, current->files);
-		return -1;
+		goto err;
 	}
 	pos = 0;
 	memset(dp, 0, l);
@@ -201,7 +210,7 @@ static int load_tuning_data(char *filename)
 		DPRINT("[CMC623:ERROR] : vfs_read() filed ret : %d\n", ret);
 		kfree(dp);
 		filp_close(filp, current->files);
-		return -1;
+		goto err;
 	}
 
 	filp_close(filp, current->files);
@@ -221,6 +230,9 @@ static int load_tuning_data(char *filename)
 
 	kfree(dp);
 	return num;
+err:
+	set_fs(fs);
+	return -1;
 }
 
 static ssize_t tuning_show(struct device *dev,
@@ -237,6 +249,10 @@ static ssize_t tuning_store(struct device *dev,
 			    size_t size)
 {
 	char *pt;
+
+	if (buf == NULL || strchr(buf, '.') || strchr(buf, '/'))
+		return size;
+
 	memset(tuning_filename, 0, sizeof(tuning_filename));
 	sprintf(tuning_filename, "%s%s", TUNING_FILE_PATH, buf);
 
@@ -279,6 +295,7 @@ void lut_tune(int num, unsigned int *pLutTable)
 	struct fb_cmap *cmap;
 	struct msm_fb_data_type *mfd;
 	uint32_t out;
+	unsigned long flags;	
 
 	/*for final assignment*/
 	u16 r_1, g_1, b_1;
@@ -347,10 +364,10 @@ void lut_tune(int num, unsigned int *pLutTable)
 	mfd = (struct msm_fb_data_type *) registered_fb[0]->par;
 	if (mfd->panel.type == MIPI_CMD_PANEL) {
 		mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
-		mutex_lock(&mdp_lut_push_sem);
+		spin_lock_irqsave(&mdp_lut_push_lock, flags);
 		mdp_lut_push = 1;
 		mdp_lut_push_i = mdp_lut_i;
-		mutex_unlock(&mdp_lut_push_sem);
+		spin_unlock_irqrestore(&mdp_lut_push_lock, flags);
 	} else {
 		/*mask off non LUT select bits*/
 		out = inpdw(MDP_BASE + 0x90070) & ~((0x1 << 10) | 0x7);
@@ -794,6 +811,39 @@ static DEVICE_ATTR(playspeed, 0664,
 			playspeed_show,
 			playspeed_store);
 
+#if defined(CONFIG_FB_MSM_MIPI_SAMSUNG_TFT_VIDEO_WSVGA_PT_PANEL)
+static ssize_t cabc_show(struct device *dev,
+		struct device_attribute *attr, char *buf)	
+{
+	int rc;
+	unsigned char cabc;
+	cabc = mipi2lvds_show_cabc();
+	rc = snprintf((char *)buf, sizeof(buf), "%d\n",cabc);
+	pr_info("%s :[MIPI2LVDS] CABC: %d\n", __func__, cabc);
+	return rc;
+
+}
+
+static ssize_t cabc_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	
+	unsigned char cabc;
+	cabc = mipi2lvds_show_cabc();
+
+	if (sysfs_streq(buf, "1") && !cabc)
+		cabc = true;
+	else if (sysfs_streq(buf, "0") && cabc)
+		cabc = false;
+	else
+		pr_info("%s: Invalid argument!!", __func__);
+	mipi2lvds_store_cabc(cabc);
+	
+	return size;
+}
+static DEVICE_ATTR(cabc, 0664, cabc_show, cabc_store);
+#endif
+
 void init_mdnie_class(void)
 {
 	mdnie_class = class_create(THIS_MODULE, "mdnie");
@@ -850,6 +900,12 @@ void init_mdnie_class(void)
 		pr_err("Failed to create device file(%s)!=n",
 			dev_attr_playspeed.attr.name);
 
+#if defined(CONFIG_FB_MSM_MIPI_SAMSUNG_TFT_VIDEO_WSVGA_PT_PANEL)
+	if (device_create_file(tune_mdnie_dev, &dev_attr_cabc) < 0) {
+		pr_info("[mipi2lvds:ERROR] device_create_file(%s)\n",\
+			dev_attr_cabc.attr.name);
+	}
+#endif
 #ifdef MDP4_VIDEO_ENHANCE_TUNING
 	if (device_create_file(tune_mdnie_dev, &dev_attr_tuning) < 0) {
 		pr_err("Failed to create device file(%s)!\n",
